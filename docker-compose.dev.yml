@@ -1,0 +1,21 @@
+name: homepage-dev
+
+services:
+  homepage:
+    build: .
+    image: homepage:latest
+    container_name: homepage
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      # Sin contraseña, /admin es abierto: úsalo solo en tu LAN.
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # Ponlo a 1 si sirves el panel por HTTPS (cookie Secure).
+      COOKIE_SECURE: ${COOKIE_SECURE:-0}
+    volumes:
+      # CasaOS: cambia por /DATA/AppData/homepage/data:/data
+      - homepage-data:/data
+
+volumes:
+  homepage-data:
