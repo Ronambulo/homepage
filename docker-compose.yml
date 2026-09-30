@@ -1,0 +1,16 @@
+name: homepage
+
+services:
+  homepage:
+    image: ghcr.io/ronambulo/homepage:latest
+    container_name: homepage
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - /DATA/AppData/homepage/data:/data
+    environment:
+      # Sin contraseña, /admin y las APIs de los widgets son abiertos: úsalo solo en tu LAN.
+      - ADMIN_PASSWORD=cambia-esto
+      # Ponlo a 1 si sirves la página por HTTPS (cookie Secure).
+      - COOKIE_SECURE=0
