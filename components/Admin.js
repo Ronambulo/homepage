@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { MODULES, THEMES, SEARCH_ENGINES, ICON_NAMES, themeStyle } from "@/lib/defaults";
 import Icon from "./Icon";
+import Kero from "./Companion";
+import { COLORS } from "@/lib/lunares";
+import { chime } from "./lunares/sound";
 import { probeLink, probeHost, resolveUrl, geocode } from "@/lib/util";
 
 const SECTIONS = [
@@ -10,6 +13,7 @@ const SECTIONS = [
   ["servicios", "Servicios", "Los que comprueba el módulo Servicios de la fila inferior."],
   ["modulos", "Módulos", "Elige qué datos se muestran y en qué orden."],
   ["apariencia", "Apariencia", "Tema, fondo y buscador."],
+  ["lunares", "Kero", "Tu compañero: aspecto, movimiento y personalidad."],
   ["conexiones", "Conexiones", "FinanceMaster, clima y red."],
   ["copia", "Copia de seguridad", "Exporta o restaura toda la configuración."],
 ];
@@ -94,6 +98,7 @@ export default function Admin({ initial, authEnabled }) {
         {tab === "servicios" && <Services cfg={cfg} set={set} />}
         {tab === "modulos" && <Modules cfg={cfg} set={set} />}
         {tab === "apariencia" && <Appearance cfg={cfg} set={set} preview={<Preview cfg={cfg} tint={tint} />} />}
+        {tab === "lunares" && <CompanionTab cfg={cfg} set={set} accent={accent} />}
         {tab === "conexiones" && <Connections cfg={cfg} set={set} />}
         {tab === "copia" && <Backup cfg={cfg} setCfg={setCfg} />}
       </main>
@@ -228,6 +233,144 @@ function Modules({ cfg, set }) {
   );
 }
 
+function CompanionTab({ cfg, set, accent }) {
+  const co = cfg.companion;
+  const lun = useRef(null);
+  const [demo, setDemo] = useState({ hour: 12, weather: { t: 21, c: 1, city: "Madrid", hi: 24, rain: 10 }, services: { total: 6, down: [] }, todos: ["Regar las plantas"] });
+  useEffect(() => { setDemo((d) => ({ ...d, hour: new Date().getHours() })); }, []);
+  const put = (k, v) => set((c) => { c.companion[k] = v; });
+
+  // modelos de OpenWebUI
+  const [models, setModels] = useState(null), [mErr, setMErr] = useState(""), [mBusy, setMBusy] = useState(false);
+  const [test, setTest] = useState(null);
+  const loadModels = async () => {
+    setMBusy(true); setMErr("");
+    try {
+      const r = await fetch("/api/lunares/models", { cache: "no-store" });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) setModels(j.models || []); else { setModels(null); setMErr(j.error || "Error " + r.status); }
+    } catch { setMErr("Sin conexión."); }
+    setMBusy(false);
+  };
+  useEffect(() => { if (co.ai) loadModels(); }, [co.ai]); // eslint-disable-line react-hooks/exhaustive-deps
+  const probe = async () => {
+    setTest({ busy: true }); const t0 = performance.now();
+    try {
+      const r = await fetch("/api/lunares", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ test: true, model: co.model, messages: [{ role: "user", content: "Hola, preséntate en una frase." }] }) });
+      const j = await r.json().catch(() => ({}));
+      const ms = Math.round(performance.now() - t0);
+      setTest(r.ok ? { ok: true, ms, text: j.text.replace(/\[[^\]]{1,16}\]/g, "").trim() } : { ms, text: j.error || "Error " + r.status });
+    } catch { setTest({ text: "Sin conexión." }); }
+  };
+
+  const Tog = ({ k, title, desc }) => (
+    <div className="ltog">
+      <span><b>{title}</b><small>{desc}</small></span>
+      <button className={"tog" + (co[k] ? " on" : "")} role="switch" aria-checked={co[k]} aria-label={title} onClick={() => { put(k, !co[k]); if (k === "sound" && !co[k]) chime(); }} />
+    </div>
+  );
+  const Seg = ({ k, opts }) => (
+    <div className="lseg">
+      {opts.map(([v, l]) => <button key={v} className={co[k] === v ? "on" : ""} aria-pressed={co[k] === v} onClick={() => put(k, v)}>{l}</button>)}
+    </div>
+  );
+  const range = (k, left, right) => (
+    <div className="lrange">
+      <input className="range" type="range" min="0" max="100" value={co[k]} onChange={(e) => put(k, +e.target.value)} aria-label={k} />
+      <div><span>{left}</span><span>{right}</span></div>
+    </div>
+  );
+  const line = (label, body, hint) => (
+    <div className="lrow">
+      <span className="lk">{label}</span>
+      <div>{body}{hint && <div className="lh">{hint}</div>}</div>
+    </div>
+  );
+  const colors = [["tema", "Tema"], ["menta", "Menta"], ["ambar", "Ámbar"], ["indigo", "Índigo"], ["malva", "Malva"], ["coral", "Coral"], ["cielo", "Cielo"]];
+  const known = models?.some((m) => m.id === co.model);
+  const tries = [["hello", "Saludar"], ["think", "Pensar"], ["goof", "Hacer el tonto"], ["dance", "Bailar"], ["wander", "Pasear"], ["scared", "Asustarse"], ["splat", "Espachurrarse"], ["sleep", "Dormir"], ["alert", "Alerta"], ...(co.ai ? [["chat", "Charlar"]] : [])];
+
+  return (
+    <div className="adm-grid lun-adm">
+      <div>
+        <div className="ltog main">
+          <span><b>Mostrar a {co.name || "Kero"}</b><small>Vive en la página de inicio. Puedes arrastrarlo, acariciarlo con el ratón o pulsarlo.</small></span>
+          <button className={"tog" + (co.enabled ? " on" : "")} role="switch" aria-checked={co.enabled} aria-label="Mostrar" onClick={() => put("enabled", !co.enabled)} />
+        </div>
+
+        <section className="lgrp">
+          <div className="cap">Aspecto</div>
+          {line("Nombre", <input className="fld sm" value={co.name} maxLength={24} placeholder="Kero" onChange={(e) => put("name", e.target.value)} />)}
+          {line("Color", (
+            <div className="lsw">
+              {colors.map(([v, l]) => <button key={v} title={l} aria-label={l} aria-pressed={co.color === v} className={co.color === v ? "on" : ""} style={{ background: COLORS[v] || "var(--accent)" }} onClick={() => put("color", v)} />)}
+            </div>
+          ))}
+          {line("Tamaño", <Seg k="size" opts={[["s", "Pequeño"], ["m", "Mediano"], ["l", "Grande"]]} />)}
+          {line("Suavidad", range("round", "Bultos marcados", "Redondito"))}
+        </section>
+
+        <section className="lgrp">
+          <div className="cap">Comportamiento</div>
+          {line("Movimiento", <Seg k="roam" opts={[["off", "Quieto"], ["bottom", "Por abajo"], ["free", "Por toda la pantalla"]]} />)}
+          {line("Rincón", <Seg k="side" opts={[["left", "Izquierda"], ["right", "Derecha"]]} />, "Donde aparece, y adonde vuelve si está quieto.")}
+          {line("Energía", range("energy", "Tranquilo", "Inquieto"))}
+          {line("Charla", <Seg k="chatter" opts={[["off", "Callado"], ["low", "A veces"], ["high", "Parlanchín"]]} />)}
+        </section>
+
+        <section className="lgrp">
+          <div className="cap">Cerebro</div>
+          <div className="ltog">
+            <span><b>Pensar con IA</b><small>Un modelo de OpenWebUI comenta tus widgets y charla contigo (doble clic sobre él). Lo intercala con sus frases de siempre.</small></span>
+            <button className={"tog" + (co.ai ? " on" : "")} role="switch" aria-checked={co.ai} aria-label="Pensar con IA" onClick={() => put("ai", !co.ai)} />
+          </div>
+          {co.ai && line("Modelo", (
+            <>
+              <div className="lmodel">
+                {models?.length ? (
+                  <select className="fld sm" value={co.model} onChange={(e) => { put("model", e.target.value); setTest(null); }}>
+                    {!known && <option value={co.model}>{co.model} (no está en OpenWebUI)</option>}
+                    {models.map((m) => <option key={m.id} value={m.id}>{m.name}{m.size ? ` · ${m.size}` : ""}</option>)}
+                  </select>
+                ) : (
+                  <input className="fld sm m" value={co.model} maxLength={80} placeholder="qwen3:0.6b" onChange={(e) => put("model", e.target.value.trim())} />
+                )}
+                <button className="sec sm" onClick={loadModels} disabled={mBusy} title="Recargar la lista" aria-label="Recargar la lista">{mBusy ? "…" : "↻"}</button>
+                <button className="sec sm" onClick={probe} disabled={test?.busy}>{test?.busy ? "Probando…" : "Probar"}</button>
+              </div>
+              {test && !test.busy && <div className={"ltest" + (test.ok ? "" : " bad")}>{test.ms != null && <b>{(test.ms / 1000).toFixed(1)} s</b>}{test.text}</div>}
+            </>
+          ), mErr ? `${mErr} Revisa Conexiones → OpenWebUI.` : "Los pequeños (0.6b–1.7b) contestan antes; los grandes, mejor.")}
+        </section>
+
+        <section className="lgrp">
+          <div className="cap">Personalidad</div>
+          <div className="ltogs">
+            <Tog k="goofy" title="Hacer el tonto" desc="Volteretas, bailes, derretirse, asomarse…" />
+            <Tog k="follow" title="Seguir el ratón" desc="Si no, mira a su aire." />
+            <Tog k="comments" title="Fijarse en lo que haces" desc="Comenta widgets, apps y búsquedas." />
+            <Tog k="drag" title="Dejarse arrastrar" desc="Lo coges, lo lanzas y cae." />
+            <Tog k="sleep" title="Dormilón" desc="Duerme de 22:00 a 9:00 y algunas tardes se echa la siesta." />
+            <Tog k="reacts" title="Reaccionar a alertas" desc="Se pone rojo y avisa si algo falla." />
+            <Tog k="nudges" title="Avisos útiles" desc="Te avisa de un evento a punto de empezar, de la lluvia, de un servicio que vuelve y de si mañana madrugas." />
+            <Tog k="daily" title="Resumen del día" desc="La primera vez que entras cada día te cuenta la agenda, el tiempo, los recordatorios y lo pendiente." />
+            <Tog k="sound" title="Sonido en los avisos" desc="Suena un tilín cuando salta un recordatorio o se acaba un temporizador." />
+          </div>
+        </section>
+      </div>
+      <div className="lun-side">
+        <div className="lun-stage">
+          {co.enabled ? <Kero ref={lun} embedded settings={co} facts={demo} accent={accent} /> : <div className="hint" style={{ margin: "auto" }}>Kero está oculto.</div>}
+        </div>
+        <div className="lseg wrap" style={{ marginTop: 12 }}>
+          {tries.map(([n, l]) => <button key={n} disabled={!co.enabled} onClick={() => lun.current?.play(n)}>{l}</button>)}
+        </div>
+        <div className="lh">Arrástralo, púlsalo (cinco veces seguidas se marea) o pásale el ratón por encima.{co.ai ? " Doble clic para hablar." : ""}</div>
+      </div>
+    </div>
+  );
+}
+
 function Appearance({ cfg, set, preview }) {
   const [busy, setBusy] = useState(false), [err, setErr] = useState("");
   const a = cfg.appearance;
@@ -352,6 +495,23 @@ function Integrations({ cfg, set }) {
         <label className="lbl" style={{ marginTop: 16 }}>URL</label>
         <input className="fld m" value={it.im.url} placeholder="http://192.168.0.24:2283" style={bad(it.im.url)} onChange={(e) => set((c) => { c.integrations.im.url = e.target.value.trim(); })} />
         {S({ k: "immichKey", label: "Clave de API", hint: "Immich → Ajustes de la cuenta → Claves de API. Para ver el total de la biblioteca hace falta una clave de administrador; las subidas de hoy funcionan con cualquiera." })}
+      </div>
+
+      <div className="group">
+        <div className="cap">OpenWebUI</div>
+        <label className="lbl" style={{ marginTop: 16 }}>URL</label>
+        <input className="fld m" value={it.owui?.url || ""} placeholder="http://192.168.0.24:3000" style={bad(it.owui?.url)} onChange={(e) => set((c) => { c.integrations.owui = { ...c.integrations.owui, url: e.target.value.trim() }; })} />
+        {S({ k: "owuiKey", label: "Clave de API", hint: "OpenWebUI → Ajustes → Cuenta → Claves de API. La usa Kero para pensar y charlar (actívalo en la pestaña de Kero)." })}
+      </div>
+
+      <div className="group">
+        <div className="cap">SearXNG</div>
+        <div className="hint" style={{ marginTop: 12 }}>Buscador para que Kero mire en internet. Hay que activar el formato JSON en su settings.yml (search → formats: html, json). Opcional: si no lo pones, usa la búsqueda web de OpenWebUI (actívala allí en Panel de administración → Ajustes → Búsqueda web).</div>
+        <label className="lbl" style={{ marginTop: 16 }}>URL</label>
+        <input className="fld m" value={it.searx?.url || ""} placeholder="http://192.168.0.24:8888" style={bad(it.searx?.url)} onChange={(e) => set((c) => { c.integrations.searx = { ...c.integrations.searx, url: e.target.value.trim() }; })} />
+        <label className="lbl" style={{ marginTop: 16 }}>Webs que no quieres que use</label>
+        <textarea className="fld m" rows={3} value={it.searx?.block || ""} placeholder={"ejemplo.com, otro.es"} style={{ height: "auto", resize: "vertical", paddingTop: 8 }} onChange={(e) => set((c) => { c.integrations.searx = { ...c.integrations.searx, block: e.target.value }; })} />
+        <div className="hint" style={{ marginTop: 6 }}>Dominios separados por comas o por líneas. Se descartan también sus subdominios, en todas las búsquedas (SearXNG, OpenWebUI, DuckDuckGo y Wikipedia).</div>
       </div>
 
       <div className="group">
