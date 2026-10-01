@@ -215,8 +215,8 @@ export default function Home({ config }) {
     if (!fmBase || !token || ls.get("fm_token_url", "") !== fmBase) { setFm({ state: "login", data: null }); return; }
     const cached = ls.get("fm_cache", null);
     if (cached) setFm({ state: "ok", data: cached });
-    const api = async (p) => {
-      const r = await fetch(fmBase + "/api" + p, { headers: { Authorization: "Bearer " + token }, signal: timeout(8000) });
+    const api = async (p, ms = 8000) => {
+      const r = await fetch(fmBase + "/api" + p, { headers: { Authorization: "Bearer " + token }, signal: timeout(ms) });
       if (r.status === 401) throw Object.assign(new Error("auth"), { auth: true });
       if (!r.ok) throw new Error(r.status);
       return r.json();
@@ -238,7 +238,7 @@ export default function Home({ config }) {
       }
       const [ov, nw, inv, up, tx] = await Promise.all([
         api("/dashboard/overview"),
-        api("/dashboard/net-worth-history?months=12").catch(() => []),
+        api("/dashboard/net-worth-history?months=24", 30000).catch(() => cached?.nw || []), // consulta lenta (precios de mercado): más tiempo y, si falla, el último dato bueno
         api("/portfolio/live").catch(() => api("/portfolio/performance")).catch(() => null),
         api("/dashboard/upcoming?days=30").catch(() => []),
         api("/transactions?page=1&page_size=5").catch(() => null),
@@ -377,14 +377,14 @@ export default function Home({ config }) {
         <div className="mods" data-page={pg} style={{ marginTop: "auto" }} {...(pages > 1 ? holdOn : {})}>
           {enabled.map((id) => {
             if (id === "fm") {
-              const d = fm.data, nw = d && (d.nw.length ? d.nw[d.nw.length - 1].net_worth : d.ov.balance), s = d?.cyc ? d.cyc.savings : d?.ov.savings_month;
+              const d = fm.data, approx = !!d && !d.nw.length, nw = d && (d.nw.length ? d.nw[d.nw.length - 1].net_worth : d.ov.balance + (d.inv?.total_market_value || 0)), s = d?.cyc ? d.cyc.savings : d?.ov.savings_month;
               const inc = d?.cyc ? d.cyc.income : d?.ov.income_month, exp = d?.cyc ? d.cyc.expenses : d?.ov.expenses_month;
               const ok = fm.state === "ok" && d;
               const hist = ok ? d.nw.map((p) => p.net_worth).filter(Number.isFinite) : [];
               const delta = hist.length > 1 ? hist[hist.length - 1] - hist[0] : null;
               const iv = ok ? d.inv : null;
               const pos = (iv?.positions || []).filter((p) => p.market_value > 0).sort((x, y) => y.market_value - x.market_value).slice(0, 5);
-              const ups = ok ? (d.up || []).slice(0, 2) : [], txs = ok ? (d.tx || []).slice(0, 2) : [];
+              const txs = ok ? (d.tx || []).slice(0, 2) : [];
               const pct = inc > 0 ? Math.round((s / inc) * 100) : null;
               const cycLbl = d?.cyc ? new Date(d.cyc.start + "T12:00:00").toLocaleDateString("es-ES", { day: "numeric", month: "short" }).replace(".", "") : "";
               return (
@@ -396,7 +396,7 @@ export default function Home({ config }) {
                     </div>
                     <div className="fmrow">
                       <div className="fmnum">
-                        <div className="big num">{ok ? eur(nw) : "—"}</div>
+                        <div className="big num" title={approx ? "Cuenta + inversiones; no incluye deudas" : undefined}>{ok ? eur(nw) : "—"}</div>
                         {ok ? (
                           <span className={"chip mono " + (s >= 0 ? "pos" : "neg")}>
                             <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">{s >= 0 ? <path d="M2 7l3-4 3 4" /> : <path d="M2 3l3 4 3-4" />}</svg>
@@ -433,17 +433,22 @@ export default function Home({ config }) {
                           ))}
                         </div>
                       )}
-                      {ups.length > 0 && (
-                        <div className="xsec">
-                          <div className="xhd"><span className="label">Próximos pagos</span></div>
-                          {ups.map((u) => (
-                            <div key={u.id} className="xln">
-                              <span className="xd mono">{u.days_until == null ? "—" : u.days_until <= 0 ? "hoy" : u.days_until === 1 ? "mañana" : "en " + u.days_until + " d"}</span>
-                              <span className="xn">{u.display_name}</span><b className="mono">{eur(Math.abs(u.avg_amount))}</b>
+                      {(() => {
+                        const last = d.nw.length ? d.nw[d.nw.length - 1] : null;
+                        const cash = last ? last.cash : d.ov.balance, inv = last ? last.portfolio : d.inv?.total_market_value || 0;
+                        if (!(cash > 0) && !(inv > 0)) return null;
+                        const tot = Math.max(cash, 0) + Math.max(inv, 0), pc = (v) => Math.round((Math.max(v, 0) / tot) * 100) + " %";
+                        return (
+                          <div className="xsec">
+                            <div className="xhd"><span className="label">Cuenta y acciones</span>{last?.debt > 0 && <span className="mono wxhl">deudas −{eur(last.debt)}</span>}</div>
+                            <div className="xbar"><i style={{ flexGrow: Math.max(cash, 0.001), background: "rgba(242,242,240,.4)" }} /><i style={{ flexGrow: Math.max(inv, 0.001), background: "var(--accent)" }} /></div>
+                            <div className="xkpi">
+                              <div><span className="mono">CUENTA · {pc(cash)}</span><b>{eur(cash)}</b></div>
+                              <div style={{ textAlign: "right" }}><span className="mono">ACCIONES · {pc(inv)}</span><b>{eur(inv)}</b></div>
                             </div>
-                          ))}
-                        </div>
-                      )}
+                          </div>
+                        );
+                      })()}
                       {txs.length > 0 && (
                         <div className="xsec">
                           <div className="xhd"><span className="label">Últimos movimientos</span></div>
