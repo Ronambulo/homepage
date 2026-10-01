@@ -39,7 +39,7 @@ function Ring({ icon, v, p }) {
 function Shell({ id, d, right, cls, children, panel, alert }) {
   const ok = d?.ok;
   return (
-    <div className="mw">
+    <div className="mw" data-mod={id}>
       {ok ? (
         <div className={"gc mod xc wc " + (cls || "")}>
           <div className="wxtop"><span className="label">{MODULES[id].label}{alert && <i className="adot" title={alert} />}</span>{right && <span className="mono wxhl">{right}</span>}</div>

@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MODULES, SEARCH_ENGINES, themeStyle } from "@/lib/defaults";
+import { MODULES, SEARCH_ENGINES, DEFAULT_COMPANION, themeStyle } from "@/lib/defaults";
 import Icon from "./Icon";
+import Companion from "./Companion";
+import { findTodo } from "@/lib/lunares";
 import { ServerCard, CalendarCard, GitHubCard, DiscoCard, HomeCard, ImmichCard } from "./Widgets";
 import { ls, timeout, eur, signed, resolveUrl, probeHost, probeLinkTimed } from "@/lib/util";
 
@@ -101,6 +103,23 @@ export default function Home({ config }) {
   const [now, setNow] = useState(null);
   const [useAlt, setUseAlt] = useState(false);
   const [page, setPage] = useState(0);
+  // cambios rápidos de Kero (clic derecho): se ven al momento y se guardan poco después, todos juntos
+  const [coTweak, setCoTweak] = useState({});
+  const coSave = useRef({ t: null, patch: {} });
+  const tweakCo = useCallback((patch) => {
+    setCoTweak((o) => ({ ...o, ...patch }));
+    const q = coSave.current;
+    Object.assign(q.patch, patch);
+    clearTimeout(q.t);
+    q.t = setTimeout(async () => {
+      const p = q.patch; q.patch = {};
+      try {
+        const c = await fetch("/api/config", { cache: "no-store", signal: timeout(8000) }).then((r) => r.json());
+        c.companion = { ...(c.companion || {}), ...p };
+        await fetch("/api/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c), signal: timeout(8000) });
+      } catch {}
+    }, 600);
+  }, []);
   const [sheet, setSheet] = useState(null); // "login" | "todo" | null
   const [status, setStatus] = useState(null); // [{name, up}]
   const [fm, setFm] = useState({ state: "idle", data: null });
@@ -165,7 +184,7 @@ export default function Home({ config }) {
       if (e.key === "Escape") setSheet(null);
       if ((e.key === "f" || e.key === "F") && !e.ctrlKey && !e.metaKey && !e.altKey && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) { e.preventDefault(); toggleFocus(); }
       if (/^[1-9]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey && !/INPUT|TEXTAREA/.test(document.activeElement?.tagName)) {
-        const l = linksRef.current[+e.key - 1]; if (l) location.href = urlRef.current(l.url);
+        const l = linksRef.current[+e.key - 1]; if (l) window.open(urlRef.current(l.url), "_blank", "noopener");
       }
     };
     document.addEventListener("keydown", onKey); return () => document.removeEventListener("keydown", onKey);
@@ -194,8 +213,16 @@ export default function Home({ config }) {
     if (S_.disk?.total && (S_.disk.used / S_.disk.total) * 100 >= al.disk) alerts.push({ mod: "srv", text: "Disco al " + Math.round((S_.disk.used / S_.disk.total) * 100) + " %" });
   }
   if (has("gh") && wd.gh?.ok && wd.gh.failing?.length) alerts.push({ mod: "gh", text: "CI fallando en " + wd.gh.failing.join(", ") });
+  // los errores de red llegan en jerga ("fetch failed", "ECONNREFUSED"…): se dicen en cristiano
+  // la mínima de esta noche (21 h a 3 h) con la curva horaria del clima
+const nightLow = (w) => {
+  if (!w?.curve?.length || w.at == null) return null;
+  const v = w.curve.filter((_, i) => { const h = (w.at < 4 ? w.at + 24 : w.at) + i; return h >= 21 && h <= 27; });
+  return v.length ? Math.min(...v) : null;
+};
+const offline = (e) => /fetch failed|econn|enotfound|ehost|etimedout|timeout|abort|network|socket/i.test(e);
   for (const k of ["srv", "cal", "gh", "dp", "ha", "im"]) {
-    const w = wd[k]; if (has(k) && w && !w.ok && !w.auth && w.error && w.error !== "sin configurar") alerts.push({ mod: k, text: MODULES[k].label + ": " + w.error });
+    const w = wd[k]; if (has(k) && w && !w.ok && !w.auth && w.error && w.error !== "sin configurar") alerts.push({ mod: k, text: MODULES[k].label + (offline(w.error) ? " no responde" : ": " + w.error) });
   }
   const alertBy = {};
   for (const a of alerts) alertBy[a.mod] = alertBy[a.mod] ? alertBy[a.mod] + " · " + a.text : a.text;
@@ -264,13 +291,13 @@ export default function Home({ config }) {
       const hT = j.hourly.temperature_2m, hC = j.hourly.weather_code, hh = (i) => j.hourly.time[i]?.slice(11, 13) + "h";
       const D = j.daily, dn = (s) => new Date(s + "T12:00").toLocaleDateString("es-ES", { weekday: "short" }).replace(".", "");
       const v = {
-        key: wxKey, t: Math.round(j.current.temperature_2m), c: j.current.weather_code, city: weather.name,
+        key: wxKey, at: +j.current.time.slice(11, 13), t: Math.round(j.current.temperature_2m), c: j.current.weather_code, city: weather.name,
         feels: Math.round(j.current.apparent_temperature), wind: Math.round(j.current.wind_speed_10m), hum: j.current.relative_humidity_2m,
         rain: D.precipitation_probability_max[0],
         hi: Math.round(D.temperature_2m_max[0]), lo: Math.round(D.temperature_2m_min[0]),
         curve: hT.slice(h0, h0 + 25).map((n) => Math.round(n)),
         hours: [1, 2, 3, 4, 5, 6].map((k) => ({ h: hh(h0 + k), t: Math.round(hT[h0 + k]), c: hC[h0 + k] })).filter((x) => Number.isFinite(x.t)),
-        days: D.time.map((d, i) => ({ n: i === 0 ? "Hoy" : dn(d), c: D.weather_code[i], hi: Math.round(D.temperature_2m_max[i]), lo: Math.round(D.temperature_2m_min[i]) })),
+        days: D.time.map((d, i) => ({ n: i === 0 ? "Hoy" : dn(d), c: D.weather_code[i], hi: Math.round(D.temperature_2m_max[i]), lo: Math.round(D.temperature_2m_min[i]), rain: D.precipitation_probability_max[i] })),
       };
       ls.set("wx_cache", v); setWx(v);
     } catch {}
@@ -279,34 +306,98 @@ export default function Home({ config }) {
 
   /* integraciones (srv, cal, gh, dp, ha) */
   const wdKey = ["srv", "cal", "gh", "dp", "ha", "im"].filter((k) => modules.some((m) => m.id === k && m.enabled)).join(",");
+  // cada integración a su ritmo: lo local (servidor, casa, Minecraft) casi en vivo, lo de fuera más tranquilo
+  const WD_EVERY = { srv: 10000, ha: 15000, dp: 15000, im: 60000, gh: 120000, cal: 300000 };
   useEffect(() => {
     if (!wdKey) return;
     let live = true;
-    const load = () => wdKey.split(",").forEach((k) => fetch("/api/widgets/" + k, { cache: "no-store", signal: timeout(15000) }).then((r) => r.json()).then((v) => live && setWd((o) => ({ ...o, [k]: v }))).catch(() => {}));
-    load(); const i = setInterval(load, 60000);
-    return () => { live = false; clearInterval(i); };
-  }, [wdKey]);
+    const busy = {}, last = {};
+    const load = (k) => {
+      if (busy[k]) return; busy[k] = true; last[k] = Date.now();
+      fetch("/api/widgets/" + k, { cache: "no-store", signal: timeout(15000) }).then((r) => r.json()).then((v) => live && setWd((o) => ({ ...o, [k]: v }))).catch(() => {}).finally(() => { busy[k] = false; });
+    };
+    const ks = wdKey.split(",");
+    ks.forEach(load);
+    const ids = ks.map((k) => setInterval(() => !document.hidden && load(k), WD_EVERY[k] || 60000));
+    // al volver a la pestaña, se pone al día lo que se haya quedado viejo
+    const vis = () => { if (!document.hidden) ks.forEach((k) => Date.now() - (last[k] || 0) > (WD_EVERY[k] || 60000) && load(k)); };
+    document.addEventListener("visibilitychange", vis);
+    return () => { live = false; ids.forEach(clearInterval); document.removeEventListener("visibilitychange", vis); };
+  }, [wdKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* tareas */
   useEffect(() => { setTodos(ls.get("todos", [])); }, []);
   const saveTodos = (v) => { setTodos(v); ls.set("todos", v); };
+  // Kero apunta y tacha tareas («apunta comprar pan», «ya he hecho lo del banco»)
+  const todosRef = useRef(todos);
+  todosRef.current = todos;
+  const onTodo = useCallback((op, text) => {
+    const list = todosRef.current;
+    if (op === "add") { const v = [...list, { text, done: false }]; todosRef.current = v; saveTodos(v); return text; }
+    if (op === "done") {
+      const i = findTodo(list, text);
+      if (i < 0) return null;
+      const v = list.map((x, j) => (j === i ? { ...x, done: true } : x)); todosRef.current = v; saveTodos(v);
+      return list[i].text;
+    }
+    return null;
+  }, []);
 
   /* refresco periódico */
+  // servicios cada minuto, FinanceMaster cada 2 (su histórico es lento), clima cada 10; nada con la pestaña oculta
+  const tick = useRef({});
+  tick.current = { fm: [has("fm") && loadFM, 120000], wx: [has("wx") && loadWx, 600000], svc: [has("svc") && refreshServices, 60000] };
   useEffect(() => {
-    const i = setInterval(() => { has("fm") && loadFM(); has("wx") && loadWx(); has("svc") && refreshServices(); }, 5 * 60 * 1000);
-    return () => clearInterval(i);
-  }); // eslint-disable-line react-hooks/exhaustive-deps
+    const last = { fm: Date.now(), wx: Date.now(), svc: Date.now() };
+    const run = () => {
+      if (document.hidden) return;
+      for (const [k, [fn, ms]] of Object.entries(tick.current)) if (fn && Date.now() - last[k] >= ms) { last[k] = Date.now(); fn(); }
+    };
+    const i = setInterval(run, 15000);
+    const vis = run;
+    document.addEventListener("visibilitychange", vis);
+    return () => { clearInterval(i); document.removeEventListener("visibilitychange", vis); };
+  }, []);
 
   const search = (e) => {
     e.preventDefault();
     const v = q.trim(); if (!v) return;
-    if (sel >= 0 && matches[sel]) { location.href = url(matches[sel].url); return; }
+    if (sel >= 0 && matches[sel]) { window.open(url(matches[sel].url), "_blank", "noopener"); return; }
     const looksUrl = /^(https?:\/\/|localhost|\d{1,3}(\.\d{1,3}){3})/i.test(v) || /^[^\s]+\.[a-z]{2,}(\/\S*)?$/i.test(v);
-    location.href = looksUrl ? (/^https?:\/\//i.test(v) ? v : "http://" + v) : SEARCH_ENGINES[appearance.searchEngine] + encodeURIComponent(v);
+    window.open(looksUrl ? (/^https?:\/\//i.test(v) ? v : "http://" + v) : SEARCH_ENGINES[appearance.searchEngine] + encodeURIComponent(v), "_blank", "noopener");
   };
 
   const h = now?.getHours();
   const hello = h == null ? "" : h < 6 ? "Buenas noches" : h < 16 ? "Buenos días" : h < 21 ? "Buenas tardes" : "Buenas noches";
+
+  const co = { ...DEFAULT_COMPANION, ...(config.companion || {}), ...coTweak };
+  const facts = {
+    hour: h, name,
+    weather: wx ? { t: Math.round(wx.t), c: wx.c, city: wx.city, rain: wx.rain, hi: Math.round(wx.hi), lo: Math.round(wx.lo) } : null,
+    services: status ? { total: status.length, down: status.filter((s) => s.up === false).map((s) => s.name) } : null,
+    todos: has("todo") ? todos.filter((t) => !t.done).map((t) => t.text) : null,
+    alerts: alerts.map((a) => a.text),
+    links: links.map((l) => ({ name: l.name, href: url(l.url) })),
+    search: SEARCH_ENGINES[appearance.searchEngine],
+    w: {
+      ...wd,
+      alert: alertBy,
+      fm: fm.state === "ok" && fm.data ? (() => {
+        const d = fm.data;
+        return {
+          nw: d.nw.length ? d.nw[d.nw.length - 1].net_worth : d.ov.balance + (d.inv?.total_market_value || 0),
+          first: d.nw.length > 1 ? d.nw[0].net_worth : null,
+          s: d.cyc ? d.cyc.savings : d.ov.savings_month,
+          inc: d.cyc ? d.cyc.income : d.ov.income_month,
+          exp: d.cyc ? d.cyc.expenses : d.ov.expenses_month,
+          inv: d.inv?.total_market_value || 0,
+        };
+      })() : { state: fm.state },
+      svc: status ? status.map((x) => ({ name: x.name, up: x.up, ms: x.ms })) : null,
+      wx: wx ? { ...wx, days: wx.days?.slice(0, 4), night: nightLow(wx), hours: undefined, curve: undefined } : null,
+      todo: todos.filter((t) => !t.done).map((t) => t.text),
+    },
+  };
 
   return (
     <>
@@ -348,7 +439,7 @@ export default function Home({ config }) {
             {matches.length > 0 && (
               <div className="sugg">
                 {matches.map((l, i) => (
-                  <a key={l.id} href={url(l.url)} className={i === sel ? "on" : ""} onMouseEnter={() => setSel(i)}><Icon link={l} size={18} />{l.name}<span className="mono">↵</span></a>
+                  <a key={l.id} href={url(l.url)} target="_blank" rel="noopener noreferrer" className={i === sel ? "on" : ""} onMouseEnter={() => setSel(i)}><Icon link={l} size={18} />{l.name}<span className="mono">↵</span></a>
                 ))}
                 <div className="note">↓ para elegir · Enter abre · sin elegir, busca en la web</div>
               </div>
@@ -362,7 +453,7 @@ export default function Home({ config }) {
               const st = status?.find((r) => r.id === l.id || r.href === url(l.url));
               let host = ""; try { host = new URL(url(l.url)).host; } catch {}
               return (
-                <a key={l.id} href={url(l.url)} className="gc app">
+                <a key={l.id} href={url(l.url)} target="_blank" rel="noopener noreferrer" className="gc app">
                   <span className="appicon"><Icon link={l} size={22} /></span>
                   <span className="appname">{l.name}</span>
                   <span className="apphost mono">{host}</span>
@@ -388,8 +479,8 @@ export default function Home({ config }) {
               const pct = inc > 0 ? Math.round((s / inc) * 100) : null;
               const cycLbl = d?.cyc ? new Date(d.cyc.start + "T12:00:00").toLocaleDateString("es-ES", { day: "numeric", month: "short" }).replace(".", "") : "";
               return (
-                <div key={id} className="mw">
-                  <a className="gc mod xc fmc" href={ok ? fmBase : "#"} onClick={ok ? undefined : (e) => { e.preventDefault(); if (fmBase) setSheet("login"); }}>
+                <div key={id} className="mw" data-mod={id}>
+                  <a className="gc mod xc fmc" href={ok ? fmBase : "#"} target={ok ? "_blank" : undefined} rel="noopener noreferrer" onClick={ok ? undefined : (e) => { e.preventDefault(); if (fmBase) setSheet("login"); }}>
                     <div className="wxtop">
                       <span className="label">{MODULES.fm.label}</span>
                       {ok && <span className="mono wxhl">{d.cyc ? "ciclo desde " + cycLbl : "este mes"}</span>}
@@ -475,7 +566,7 @@ export default function Home({ config }) {
               const allTot = dayCells.reduce((t, c) => [t[0] + c[0], t[1] + c[1]], [0, 0]);
               const pctTxt = (t) => (t[1] ? (Math.floor((t[0] / t[1]) * 1000) / 10).toLocaleString("es-ES", { maximumFractionDigits: 1 }) + " %" : "—");
               return (
-                <div key={id} className="mw">
+                <div key={id} className="mw" data-mod={id}>
                   <button className="gc mod xc svcc" onClick={() => { setStatus(null); refreshServices(); }}>
                     <div className="wxtop">
                       <span className="label">{MODULES.svc.label}{alertBy.svc && <i className="adot" title={alertBy.svc} />}</span>
@@ -496,7 +587,7 @@ export default function Home({ config }) {
                         <div key={r.id} className="srow" style={{ "--i": i }}>
                           <div className="srt">
                             <i className={r.up ? "up" : "down"} />
-                            <a href={r.href} className="pn">{r.name}</a>
+                            <a href={r.href} target="_blank" rel="noopener noreferrer" className="pn">{r.name}</a>
                             <span className="mono pm">{r.up ? r.ms + " ms" : "sin respuesta"}</span>
                             <span className="mono su">{pctTxt(svcTot(r.id))}</span>
                           </div>
@@ -539,7 +630,7 @@ export default function Home({ config }) {
             if (id === "wx") {
               const gmin = wx ? Math.min(...wx.days.map((d) => d.lo)) : 0, gmax = wx ? Math.max(...wx.days.map((d) => d.hi)) : 1, gs = gmax - gmin || 1;
               return (
-                <div key={id} className="mw">
+                <div key={id} className="mw" data-mod={id}>
                   <a className="gc mod xc" href="/admin#conexiones">
                     <div className="wxtop">
                       <span className="label">{MODULES.wx.label}{wx ? " · " + wx.city : ""}</span>
@@ -589,7 +680,7 @@ export default function Home({ config }) {
             const pending = todos.filter((t) => !t.done);
             const shown = todos.map((t, i) => ({ t, i })).filter((x) => !x.t.done).slice(0, 6);
             return (
-              <div key={id} className="mw">
+              <div key={id} className="mw" data-mod={id}>
                 <button className="gc mod xc" onClick={() => setSheet("todo")}>
                   <div className="label">{MODULES.todo.label}</div>
                   <div className="big num">{pending.length}</div>
@@ -637,6 +728,8 @@ export default function Home({ config }) {
           )}
         </div>
       </div>
+
+      {co.enabled && <Companion settings={co} facts={facts} accent={accent} onTweak={tweakCo} onTodo={onTodo} />}
 
       {sheet === "login" && <LoginSheet base={fmBase} onClose={() => setSheet(null)} onDone={() => { setSheet(null); loadFM(); }} />}
       {sheet === "todo" && <TodoSheet todos={todos} save={saveTodos} onClose={() => setSheet(null)} />}
