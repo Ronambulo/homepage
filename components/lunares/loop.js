@@ -72,6 +72,7 @@ export function makeFrame(E) {
     if (m !== S.mood && !S.answering) { // no se duerme ni se alarma a media respuesta
       const was = S.mood, settled = t - born > 4000;
       S.mood = m; set.mood(m);
+      E.trace?.ev("sleep", { to: m, from: was, why: m === "sleep" ? (S.napUntil > t ? "nap" : S.sleepWhy) : null }, null);
       if (m === "sleep") {
         cancel(); E.tok++; E.busy = false; setExpr(null); set.bubble(null); E.closeChat();
         S.slept = S.napUntil > t ? "nap" : S.sleepWhy;

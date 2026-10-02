@@ -4,20 +4,21 @@ import { NextResponse } from "next/server";
 import { DATA_DIR, readConfig, writeConfig } from "@/lib/store";
 import { readSecrets, writeSecrets, SECRET_KEYS } from "@/lib/secrets";
 import { isAuthed } from "@/lib/auth";
+import { readMemory, writeMemory } from "@/lib/kero";
 
 export const dynamic = "force-dynamic";
 
 const EXTS = ["webp", "jpg", "png", "avif"];
 const unauthorized = () => NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-// Copia completa: configuración + claves + fondo. Contiene secretos: hay que guardarla como tal.
+// Copia completa: configuración + claves + fondo + lo que Kero sabe de ti. Contiene secretos: hay que guardarla como tal.
 export async function GET() {
   if (!(await isAuthed())) return unauthorized();
   let background = null;
   for (const ext of EXTS) {
     try { background = { ext, data: (await fs.readFile(path.join(DATA_DIR, "background." + ext))).toString("base64") }; break; } catch {}
   }
-  const body = { app: "homepage", version: 1, exportedAt: new Date().toISOString(), config: await readConfig(), secrets: await readSecrets(), background };
+  const body = { app: "homepage", version: 1, exportedAt: new Date().toISOString(), config: await readConfig(), secrets: await readSecrets(), background, kero: { facts: await readMemory() } };
   return new NextResponse(JSON.stringify(body, null, 2), {
     headers: { "Content-Type": "application/json", "Content-Disposition": 'attachment; filename="homepage-backup.json"', "Cache-Control": "no-store" },
   });
@@ -42,6 +43,9 @@ export async function POST(req) {
   // Sustituye las claves: las que no vienen en la copia se borran
   const patch = Object.fromEntries(SECRET_KEYS.map((k) => [k, typeof j.secrets?.[k] === "string" ? j.secrets[k] : ""]));
   await writeSecrets(patch);
+
+  // las copias antiguas no traen la memoria de Kero: entonces se deja la que hay
+  if (Array.isArray(j.kero?.facts)) await writeMemory(j.kero.facts);
 
   if (bg) {
     for (const e of EXTS) await fs.rm(path.join(DATA_DIR, "background." + e), { force: true });

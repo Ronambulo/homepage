@@ -309,6 +309,7 @@ export function makeBehaviours(E) {
     let r = Math.random() * w.reduce((a, [, v]) => a + v, 0), k = "look";
     for (const [n, v] of w) if ((r -= v) <= 0) { k = n; break; }
     S.recent = [k, ...S.recent.filter((x) => x !== k)].slice(0, 4);
+    E.trace?.ev("choose", { w: w.filter(([, v]) => v > 0).map(([n, v]) => [n, Math.round(v * 100) / 100]), pick: k, mood: S.moodK }, null);
     return k;
   }
 

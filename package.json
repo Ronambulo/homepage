@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --no-warnings --test \"test/*.test.js\""
+    "test": "node --no-warnings --test \"test/*.test.js\"",
+    "kero-log": "node --no-warnings scripts/kero-log.mjs"
   },
   "dependencies": {
     "next": "^15.5.0",

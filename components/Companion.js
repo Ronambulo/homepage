@@ -37,12 +37,13 @@ const Companion = forwardRef(function Companion({ settings, facts, accent, embed
   const [sky, setSky] = useState(null); // efecto del tiempo: { k, n }
   const [burst, setBurst] = useState(0); // al despertar explota la pompa
   const [rems, setRems] = useState([]); // recordatorios pendientes
+  const [mem, setMem] = useState([]); // lo que sabe de ti
 
   useImperativeHandle(ref, () => ({ play: (n) => api.current?.play(n) }), []);
   useEffect(() => { if (chat) chatIn.current?.focus(); }, [chat]);
 
   useEffect(() => {
-    const set = { expr: setExpr, mood: setMood, face: setFace, moodK: setMoodK, bubble: setBubble, dragging: setDragging, chat: setChat, thinking: setThinking, trail: setTrail, menu: setMenu, burst: setBurst, party: setParty, sky: setSky, rems: setRems };
+    const set = { expr: setExpr, mood: setMood, face: setFace, moodK: setMoodK, bubble: setBubble, dragging: setDragging, chat: setChat, thinking: setThinking, trail: setTrail, menu: setMenu, burst: setBurst, party: setParty, sky: setSky, rems: setRems, mem: setMem };
     const eng = createEngine({ P, refs, set });
     api.current = eng;
     return () => { eng.destroy(); api.current = null; };
@@ -69,8 +70,8 @@ const Companion = forwardRef(function Companion({ settings, facts, accent, embed
     <div ref={refs.layer} className={"lun-layer" + (embedded ? " embedded" : "")} style={accent ? { "--accent": accent } : undefined}>
       {menu && (
         <Menu
-          at={menu} layer={refs.layer} s={s} fill={fill} status={status} rems={rems} onTweak={onTweak} onClose={closeMenu}
-          onAct={(n) => { setMenu(null); api.current?.play(n); }} onDelRem={(id) => api.current?.delRem(id)}
+          at={menu} layer={refs.layer} s={s} fill={fill} status={status} rems={rems} facts={mem} onTweak={onTweak} onClose={closeMenu}
+          onAct={(n) => { setMenu(null); api.current?.play(n); }} onDelRem={(id) => api.current?.delRem(id)} onDelFact={(id) => api.current?.delFact(id)}
         />
       )}
       {(bubble || chat) && (

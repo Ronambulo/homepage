@@ -263,14 +263,22 @@ const offline = (e) => /fetch failed|econn|enotfound|ehost|etimedout|timeout|abo
         const sum = await api(`/transactions?date_from=${from}&page_size=1`).catch(() => null);
         if (sum) { cyc.income = Math.abs(sum.income_sum || 0); cyc.expenses = Math.abs(sum.expense_sum || 0); cyc.savings = cyc.income - cyc.expenses; } else cyc = null;
       }
-      const [ov, nw, inv, up, tx] = await Promise.all([
+      const [ov, inv, up, tx] = await Promise.all([
         api("/dashboard/overview"),
-        api("/dashboard/net-worth-history?months=24", 30000).catch(() => cached?.nw || []), // consulta lenta (precios de mercado): más tiempo y, si falla, el último dato bueno
         api("/portfolio/live").catch(() => api("/portfolio/performance")).catch(() => null),
         api("/dashboard/upcoming?days=30").catch(() => []),
         api("/transactions?page=1&page_size=5").catch(() => null),
       ]);
-      const data = { ov, nw, inv, up, tx: tx?.items || [], cyc }; ls.set("fm_cache", data); setFm({ state: "ok", data });
+      // la gráfica: mientras llega la historia, la última buena (si la hay)
+      const data = { ov, nw: cached?.nw || [], inv, up, tx: tx?.items || [], cyc }; ls.set("fm_cache", data); setFm({ state: "ok", data });
+      // la historia del patrimonio es muy lenta la primera vez (calcula precios de mercado de 24 meses):
+      // va aparte y sin prisa, para no dejar el widget sin gráfica si tarda más que el resto
+      api("/dashboard/net-worth-history?months=24", 120000).then((nw) => {
+        if (!Array.isArray(nw)) return;
+        const c = ls.get("fm_cache", null);
+        if (c) ls.set("fm_cache", { ...c, nw });
+        setFm((f) => (f.state === "ok" && f.data ? { ...f, data: { ...f.data, nw } } : f));
+      }).catch(() => {});
     } catch (e) {
       if (e.auth) { ls.del("fm_token"); ls.del("fm_cache"); setFm({ state: "login", data: null }); }
       else if (!cached) setFm({ state: "offline", data: null });

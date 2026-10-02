@@ -2,10 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { chunks, partial, parseAI, toYou, toThem, readMs } from "../lib/lunares/text.js";
 
-test("chunks junta frases cortas y no pasa de 5 burbujas", () => {
+test("chunks junta frases cortas y no pasa de 6 burbujas", () => {
   assert.deepEqual(chunks("Hola. ¿Qué tal?"), ["Hola. ¿Qué tal?"]);
   const long = Array.from({ length: 9 }, (_, i) => `Esta es la frase número ${i} y es bastante larga para ir sola.`).join(" ");
-  assert.equal(chunks(long).length, 5);
+  assert.equal(chunks(long).length, 6);
 });
 
 test("parseAI y partial", () => {
