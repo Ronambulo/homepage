@@ -13,6 +13,7 @@ import { makeBehaviours } from "./behaviours";
 import { makeTalk } from "./talk";
 import { bindInput } from "./input";
 import { makeFrame } from "./loop";
+import { makeTrace } from "./trace";
 import { PX, rnd, clamp, lin, io, Cancel } from "./util";
 
 const PLAT = ".gc, .hero .time, button"; // cosas de la página sobre las que puede posarse
@@ -212,6 +213,7 @@ export function createEngine({ P, refs, set }) {
     wait, tween, guard, cancel, setExpr, run, chance,
     say, ponder, hush, line, sayMany, show, hop, walkTo, spot, drop, rouse,
   });
+  E.trace = makeTrace(page); // lo que piensa, para /kero (el cerebro)
   Object.assign(E, makeBehaviours(E)); // B, choose, gripe, goofs
   Object.assign(E, makeTalk(E)); // ctx, askAI, sayAI, send, openChat, closeChat, recordatorios…
   const unbind = bindInput(E);
@@ -222,6 +224,7 @@ export function createEngine({ P, refs, set }) {
   raf = requestAnimationFrame(loop);
   run(E.B.hello);
   const stopTalk = E.startTalk();
+  E.trace.onAsk = (t) => { if (t) { S.lastAct = now(); E.send(t); } };
 
   return {
     // probar desde el panel
@@ -239,12 +242,13 @@ export function createEngine({ P, refs, set }) {
     send: (t) => E.send(t),
     closeChat: () => E.closeChat(),
     delRem: (id) => E.delRem(id),
+    delFact: (id) => E.delFact(id),
     act: (k) => E.onAct?.(k),
     destroy() {
       E.alive = false;
       cancelAnimationFrame(raf); cancel(); E.tok++;
       for (const t of Object.values(E.timers)) { clearTimeout(t); clearInterval(t); }
-      unbind(); stopTalk();
+      unbind(); stopTalk(); E.trace.close();
     },
   };
 }

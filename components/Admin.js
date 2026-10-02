@@ -239,6 +239,16 @@ function CompanionTab({ cfg, set, accent }) {
   const [demo, setDemo] = useState({ hour: 12, weather: { t: 21, c: 1, city: "Madrid", hi: 24, rain: 10 }, services: { total: 6, down: [] }, todos: ["Regar las plantas"] });
   useEffect(() => { setDemo((d) => ({ ...d, hour: new Date().getHours() })); }, []);
   const put = (k, v) => set((c) => { c.companion[k] = v; });
+  // registro de fallos (data/kero-log.jsonl): cuántos hay, descargarlo o vaciarlo
+  const [logN, setLogN] = useState(null);
+  useEffect(() => {
+    if (co.log) fetch("/api/lunares/log", { cache: "no-store" }).then((r) => r.json()).then((j) => setLogN(Number.isFinite(j.count) ? j.count : null)).catch(() => {});
+  }, [co.log]);
+  const clearLog = async () => {
+    if (!confirm("¿Vaciar el registro de fallos de Kero?")) return;
+    const j = await fetch("/api/lunares/log", { method: "DELETE" }).then((r) => r.json()).catch(() => null);
+    if (Number.isFinite(j?.count)) setLogN(j.count);
+  };
 
   // modelos de OpenWebUI
   const [models, setModels] = useState(null), [mErr, setMErr] = useState(""), [mBusy, setMBusy] = useState(false);
@@ -341,6 +351,12 @@ function CompanionTab({ cfg, set, accent }) {
               {test && !test.busy && <div className={"ltest" + (test.ok ? "" : " bad")}>{test.ms != null && <b>{(test.ms / 1000).toFixed(1)} s</b>}{test.text}</div>}
             </>
           ), mErr ? `${mErr} Revisa Conexiones → OpenWebUI.` : "Los pequeños (0.6b–1.7b) contestan antes; los grandes, mejor.")}
+          {co.ai && (
+            <div className="ltog">
+              <span><b>Internet con IA</b><small>Lee las webs que encuentra y te lo explica con sus palabras, citando de dónde sale cada dato. Tarda más y usa el modelo; apagado, junta frases de las webs tal cual.</small></span>
+              <button className={"tog" + (co.webAI !== false ? " on" : "")} role="switch" aria-checked={co.webAI !== false} aria-label="Internet con IA" onClick={() => put("webAI", co.webAI === false)} />
+            </div>
+          )}
         </section>
 
         <section className="lgrp">
@@ -355,6 +371,13 @@ function CompanionTab({ cfg, set, accent }) {
             <Tog k="nudges" title="Avisos útiles" desc="Te avisa de un evento a punto de empezar, de la lluvia, de un servicio que vuelve y de si mañana madrugas." />
             <Tog k="daily" title="Resumen del día" desc="La primera vez que entras cada día te cuenta la agenda, el tiempo, los recordatorios y lo pendiente." />
             <Tog k="sound" title="Sonido en los avisos" desc="Suena un tilín cuando salta un recordatorio o se acaba un temporizador." />
+            <Tog k="log" title="Registro de fallos" desc="Apunta en el servidor las preguntas en las que falla: cuando le dices «no, eso no», le repites la pregunta con otras palabras, no sabe contestar o se inventa cifras. Solo la pregunta y por dónde fue, nunca tus datos. Guarda las 500 últimas." />
+            {co.log && (
+              <div className="lh">
+                {logN == null ? "Aún no hay nada apuntado." : `${logN} ${logN === 1 ? "fallo apuntado" : "fallos apuntados"}.`}{" "}
+                {logN > 0 && <><a href="/api/lunares/log?download=1">Descargar</a> · <button className="sec sm" onClick={clearLog}>Vaciar</button></>}
+              </div>
+            )}
           </div>
         </section>
       </div>
@@ -453,6 +476,51 @@ function Secret({ k, label, hint, saved, setSaved, placeholder, type = "password
   );
 }
 
+// Bot de Telegram (lib/kerobot.js): estado, código para vincular tu chat y pruebas
+function Telegram({ has }) {
+  const [st, setSt] = useState(null), [msg, setMsg] = useState(""), [busy, setBusy] = useState(false);
+  const done = useRef(false);
+  const load = () => fetch("/api/lunares/telegram", { cache: "no-store" }).then((r) => r.json()).then((j) => { done.current = !!j.paired; setSt(j); }).catch(() => {});
+  useEffect(() => {
+    load();
+    // mientras esperas a mandarle el código, se mira cada pocos segundos si ya está vinculado
+    const t = setInterval(() => { if (!done.current && document.visibilityState === "visible") load(); }, 4000);
+    return () => clearInterval(t);
+  }, [has]);
+  const op = async (o) => {
+    setBusy(true); setMsg("");
+    try {
+      const r = await fetch("/api/lunares/telegram", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ op: o }) });
+      const j = await r.json().catch(() => ({}));
+      if (o === "test") setMsg(r.ok ? "Enviado. Mira Telegram." : "No se pudo: " + (j.error || r.status));
+      else if (r.ok) { done.current = !!j.paired; setSt(j); }
+    } finally { setBusy(false); }
+  };
+  if (!has || !st?.token) return null;
+  const bot = st.name ? "@" + st.name : "tu bot";
+  return (
+    <div style={{ marginTop: 16 }}>
+      {st.err ? <div className="err">{st.err}</div> : !st.on ? <div className="hint">Conectando con Telegram…</div> : null}
+      {st.paired ? (
+        <>
+          <div className="card" style={{ gridTemplateColumns: "1fr auto auto", gap: 12 }}>
+            <div><b>Vinculado{st.who ? " con " + st.who : ""}</b><div className="hint" style={{ marginTop: 2 }}>Habla con {bot} desde el móvil.</div></div>
+            <button className="sec" disabled={busy} onClick={() => op("test")}>Probar</button>
+            <button className="sec" disabled={busy} onClick={() => op("unpair")}>Desvincular</button>
+          </div>
+          {msg && <div className="hint">{msg}</div>}
+        </>
+      ) : st.on && st.code ? (
+        <div className="card" style={{ gridTemplateColumns: "1fr" }}>
+          <div>Abre {st.name ? <a href={"https://t.me/" + st.name} target="_blank" rel="noreferrer">{bot}</a> : bot} en Telegram y mándale este código:</div>
+          <div className="mono" style={{ fontSize: 28, letterSpacing: ".2em", marginTop: 8 }}>{st.code}</div>
+          <div className="hint">Caduca en 15 minutos. Solo el chat que lo mande podrá hablar con Kero.</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function Integrations({ cfg, set }) {
   const [saved, setSaved] = useState(null);
   useEffect(() => { fetch("/api/secrets", { cache: "no-store" }).then((r) => r.json()).then(setSaved).catch(() => {}); }, []);
@@ -502,6 +570,13 @@ function Integrations({ cfg, set }) {
         <label className="lbl" style={{ marginTop: 16 }}>URL</label>
         <input className="fld m" value={it.owui?.url || ""} placeholder="http://192.168.0.24:3000" style={bad(it.owui?.url)} onChange={(e) => set((c) => { c.integrations.owui = { ...c.integrations.owui, url: e.target.value.trim() }; })} />
         {S({ k: "owuiKey", label: "Clave de API", hint: "OpenWebUI → Ajustes → Cuenta → Claves de API. La usa Kero para pensar y charlar (actívalo en la pestaña de Kero)." })}
+      </div>
+
+      <div className="group">
+        <div className="cap">Telegram</div>
+        <div className="hint" style={{ marginTop: 12 }}>Para hablar con Kero desde el móvil y que te lleguen ahí los recordatorios. En Telegram, habla con @BotFather, manda /newbot, elige un nombre y pega aquí el token que te da.</div>
+        {S({ k: "tgToken", label: "Token del bot", placeholder: "123456789:AA…" })}
+        <Telegram has={!!saved?.tgToken} />
       </div>
 
       <div className="group">

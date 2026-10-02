@@ -1,44 +1,13 @@
 import { NextResponse } from "next/server";
 import { isAuthed } from "@/lib/auth";
 import { owui } from "@/lib/owui";
+import { toolOf } from "@/lib/lunares/tools";
+import { LONG, SHORT, finish, noteOf, topicOf, system, DEEP, fit, TELLS, ABOUT_Q, noThink } from "@/lib/keroai";
 
 export const dynamic = "force-dynamic";
 const NO_STORE = { "Cache-Control": "no-store" };
 const fail = (error, status = 502) => NextResponse.json({ error }, { status, headers: NO_STORE });
 const clip = (v, n) => String(v ?? "").slice(0, n);
-
-// los modelos pequeños no siempre obedecen: sin emojis, sin markdown y como mucho cuatro frases
-const tidy = (t, max = 4, len = 420) => {
-  t = t.replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, "").replace(/[*_#`]/g, "").replace(/\s+/g, " ").trim();
-  const tags = (t.match(/^(\s*\[[^\]]{1,16}\])+/) || [""])[0];
-  const parts = t.slice(tags.length).trim().match(/[^.!?…]+[.!?…]+|[^.!?…]+$/g) || [];
-  // si el modelo se quedó sin tokens a media frase, esa frase cortada se quita
-  if (parts.length > 1 && !/[.!?…]\s*$/.test(parts[parts.length - 1])) parts.pop();
-  let out = "";
-  // en la charla se reparten en varias burbujas
-  for (const p of parts) { if (out && (out + p).length > len) break; out += p; if (out.split(/[.!?…]+/).filter((s) => s.trim()).length >= max) break; }
-  return (tags + " " + out.trim()).trim().slice(0, len + 40);
-};
-// «Perfecto», «Vale»… no contestan nada: null para reintentar o darla por vacía
-const finish = (raw) => {
-  const text = String(raw || "").replace(/<think>[\s\S]*?(<\/think>|$)/g, "").replace(/\s+/g, " ").trim();
-  const bare = text.replace(/\[[^\]]{1,16}\]/g, "").replace(/[^\p{L}\p{N}\s]/gu, "").trim();
-  return bare && (bare.split(/\s+/).length >= 3 || !/^(perfecto|vale|ok|okay|claro|entendido|genial|de acuerdo|si|sí|no|bien|hola)$/i.test(bare)) ? tidy(text) : null;
-};
-
-// Instrucciones cortas: los modelos pequeños (gemma3:270m, qwen3:0.6b) se pierden con un prompt largo.
-const system = (name, about) => `Eres ${name}, una mascota con forma de gota que vive en la página de inicio de tu dueño. Eres curioso, cariñoso y algo payaso. Hablas en español, tuteando.
-Reglas: contesta con frases cortas, normalmente 1 o 2; si tienes varias cosas que contar, hasta 4. Sin listas, emojis ni markdown. Usa solo los datos que te dan; si no están, di que no lo sabes. Nunca inventes cifras.
-Empieza con una emoción entre corchetes: [happy] [love] [think] [surprised] [worried] [proud] [sus] [annoyed] [sleep].${about ? "\n\n" + ABOUT : ""}`;
-
-// Cómo funciona la página: solo se manda si la pregunta va de eso
-const ABOUT = `Sobre la página:
-- Arriba: la fecha y el botón «Editar», que abre los ajustes (Enlaces, Servicios, Módulos, Apariencia, Kero, Conexiones, Copia de seguridad). Todo se guarda solo.
-- Centro: reloj y saludo. Atajos: «/» busca, «F» modo foco, 1–9 abren las apps.
-- Fila de apps: enlaces a los servicios; el punto de color dice si responden.
-- Carrusel de widgets: Patrimonio (FinanceMaster), Servicios (ping), Clima (Open-Meteo), Tareas, Servidor (CPU, RAM, disco, temperatura, consumo), Calendario (iCal), GitHub, DiscoPanel (Minecraft), Casa (Home Assistant) e Immich (fotos).
-- Tú: te pueden arrastrar y lanzar; doble clic abre la charla; «abre X» abre una app; «busca X» lo buscas en internet; «recuérdame…», «apunta…» y «recuerda que…» los apuntas tú. Duermes de 22 a 9 y a veces la siesta.`;
-const ABOUT_Q = /editar|ajuste|configur|atajo|tecla|bot[oó]n|widget|p[aá]gina|carrusel|c[oó]mo (se|puedo|hago)|para qu[eé] sirve|qu[eé] (es|eres|haces|sabes)|qui[eé]n eres|dormir|siesta/i;
 
 // Puente con OpenWebUI (API compatible con OpenAI). La clave nunca sale del servidor.
 // Con `stream: true` contesta en NDJSON: {"d": trozo}… y al final {"text": respuesta limpia} o {"error"}.
@@ -51,24 +20,33 @@ export async function POST(req) {
   if (!base) return fail("OpenWebUI sin configurar", 400);
   if (!co.ai && !body?.test) return fail("IA desactivada", 400);
   const model = (typeof body?.model === "string" && body.model.trim() && clip(body.model.trim(), 80)) || co.model || "qwen3:0.6b";
-  const msgs = (Array.isArray(body?.messages) ? body.messages : [])
+  const msgs = fit((Array.isArray(body?.messages) ? body.messages : [])
     .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
-    .slice(-12)
-    .map((m) => ({ role: m.role, content: clip(m.content, 600) }));
+    .slice(-20)
+    .map((m) => ({ role: m.role, content: clip(m.content, 1200) })));
   if (!msgs.length || msgs[msgs.length - 1].role !== "user") return fail("sin mensaje", 400);
   // los datos van pegados a la última pregunta: un modelo pequeño los ignora si están lejos, en el prompt de sistema
   const data = clip(body?.context, 2000).trim(), last = msgs[msgs.length - 1].content;
-  const about = ABOUT_Q.test(last);
+  const about = ABOUT_Q.test(last), note = TELLS.test(last) && !/\?/.test(last), tools = !!body?.stream && body?.tools === true;
+  // en la charla, respuestas más largas; y si la pregunta lo pide, que piense antes
+  const prefs = (Array.isArray(body?.prefs) ? body.prefs : []).filter((p) => typeof p === "string" && p.trim()).slice(-5).map((p) => clip(p.trim(), 120));
+  const topic = !!body?.stream && body?.topic === true;
+  // «háblame más corto» o «más largo» también cambia cuánto se deja hablar
+  const brief = prefs.some((p) => /cort|breve|conciso|grano|enroll/i.test(p)) && !prefs.some((p) => /larg|detall|extens/i.test(p) && !/menos/i.test(p));
+  const long = !brief && prefs.some((p) => /larg|detall|extens/i.test(p) && !/menos/i.test(p));
+  const size = body?.stream ? (brief ? [3, 380] : long ? [8, 900] : LONG) : brief ? [2, 260] : SHORT;
+  const deep = !!body?.stream && last.length >= 25 && DEEP.test(last) && !noThink.has(model);
   const withData = [...msgs.slice(0, -1), { role: "user", content: data ? `Datos reales ahora mismo:\n${data}\n\n${last}` : last }];
-  const call = (tries, stream, signal) => fetch(`${base}/api/chat/completions`, {
+  const call = (tries, stream, signal, think = false) => fetch(`${base}/api/chat/completions`, {
     method: "POST",
     headers,
     body: JSON.stringify({
       model,
-      messages: [{ role: "system", content: system(co.name || "Kero", about) }, ...withData],
-      // think: false apaga el razonamiento de qwen3 (si no, piensa cientos de tokens antes de contestar)
-      params: { think: false, keep_alive: "30m" },
-      stream, max_tokens: 180, temperature: tries ? 0.6 : 0.8,
+      messages: [{ role: "system", content: system(co.name || "Kero", about, note, tools, { prefs, topic }) }, ...withData],
+      // think: el razonamiento, apagado salvo en las preguntas que lo merecen (si no, piensa cientos de tokens antes de contestar)
+      params: { think, keep_alive: "30m" },
+      // pensando, los tokens del razonamiento también cuentan
+      stream, max_tokens: think ? 1200 : body?.stream ? (long ? 560 : 400) + (topic ? 30 : 0) : 180, temperature: tries ? 0.6 : 0.8,
     }),
     signal,
     cache: "no-store",
@@ -76,10 +54,14 @@ export async function POST(req) {
   const bad = (r) => (r.status === 404 || r.status === 400 ? `modelo «${model}» no disponible` : `OpenWebUI ${r.status}`);
 
   if (body?.stream) {
-    // si se cierra la charla (o pasan 30 s), se deja de esperar al modelo
-    const signal = AbortSignal.any([req.signal, AbortSignal.timeout(30000)]);
+    // si se cierra la charla (o pasan 30 s; 60 s si piensa), se deja de esperar al modelo
+    const signal = AbortSignal.any([req.signal, AbortSignal.timeout(deep ? 60000 : 30000)]);
     let r;
-    try { r = await call(0, true, signal); } catch (e) { return fail(e?.name === "TimeoutError" ? "tiempo agotado" : "sin conexión"); }
+    try {
+      r = await call(0, true, signal, deep);
+      // el modelo no sabe pensar: se apunta y se pregunta otra vez sin pensar
+      if (deep && !r.ok) { noThink.add(model); r = await call(0, true, signal); }
+    } catch (e) { return fail(e?.name === "TimeoutError" ? "tiempo agotado" : "sin conexión"); }
     if (!r.ok || !r.body) return fail(bad(r));
     const enc = new TextEncoder(), dec = new TextDecoder();
     const out = new ReadableStream({
@@ -102,8 +84,11 @@ export async function POST(req) {
               if (d) { raw += d; put({ d }); }
             }
           }
-          const text = finish(raw);
-          put(text ? { text } : { error: "respuesta vacía" });
+          // pide una herramienta: la ejecuta la página
+          const tool = tools ? toolOf(raw) : null;
+          if (tool) { put({ tool }); try { ctl.close(); } catch {} return; }
+          const text = finish(raw, size), mem = note ? noteOf(raw) : null, subj = topic ? topicOf(raw) : null;
+          put(text ? { text, ...(mem ? { note: mem } : {}), ...(subj ? { topic: subj } : {}) } : { error: "respuesta vacía" });
         } catch (e) {
           put({ error: e?.name === "TimeoutError" ? "tiempo agotado" : "sin conexión" });
         }
@@ -120,8 +105,8 @@ export async function POST(req) {
       const r = await call(tries, false, AbortSignal.timeout(Math.max(1000, deadline - Date.now())));
       if (!r.ok) return fail(bad(r));
       const j = await r.json();
-      const text = finish(j?.choices?.[0]?.message?.content);
-      if (text) return NextResponse.json({ text }, { headers: NO_STORE });
+      const raw = j?.choices?.[0]?.message?.content, text = finish(raw, size), mem = note ? noteOf(raw) : null;
+      if (text) return NextResponse.json({ text, ...(mem ? { note: mem } : {}) }, { headers: NO_STORE });
     }
     return fail("respuesta vacía");
   } catch (e) {
